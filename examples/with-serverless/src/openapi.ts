@@ -1,4 +1,4 @@
-import { generateOpenApiDocument } from 'trpc-openapi';
+import { generateOpenApiDocument } from 'better-trpc-openapi';
 
 import { appRouter } from './router';
 
@@ -8,6 +8,6 @@ export const openApiDocument = generateOpenApiDocument(appRouter, {
   description: 'OpenAPI compliant REST API built using tRPC with Serverless',
   version: '1.0.0',
   baseUrl: 'http://localhost:3000/api',
-  docsUrl: 'https://github.com/jlalmes/trpc-openapi',
+  docsUrl: 'https://github.com/deldrid1/trpc-openapi',
   tags: ['auth', 'users', 'posts'],
 });

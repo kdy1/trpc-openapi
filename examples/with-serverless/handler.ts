@@ -1,5 +1,5 @@
 import { awsLambdaRequestHandler } from '@trpc/server/adapters/aws-lambda';
-import { createOpenApiAwsLambdaHandler } from 'trpc-openapi';
+import { createOpenApiAwsLambdaHandler } from 'better-trpc-openapi';
 
 import { openApiDocument } from './src/openapi';
 import { appRouter, createContext } from './src/router';

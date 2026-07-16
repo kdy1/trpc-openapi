@@ -2,18 +2,25 @@ name: Test
 on: [push]
 jobs:
   test:
+    strategy:
+      matrix:
+        node-version: [20, 24]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Setup node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 16
+          node-version: ${{ matrix.node-version }}
+          cache: npm
 
       - name: Install dependencies
-        run: npm ci --force
+        run: npm ci
+
+      - name: Assert Zod 4 resolution
+        run: node -e "const version = require('zod/package.json').version; if (!version.startsWith('4.')) throw new Error(`Expected Zod 4, got ${version}`)"
 
       - name: Run tests
         run: npm test

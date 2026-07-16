@@ -1,8 +1,8 @@
-# [**`trpc-openapi`**](../../README.md) (with-nuxtjs)
+# [**`better-trpc-openapi`**](../../README.md) (with-nuxtjs)
 
 ### Getting started
 
-Make sure your current working directory is at `/trpc-openapi` root.
+Make sure your current working directory is at `/better-trpc-openapi` root.
 
 ```bash
 npm install

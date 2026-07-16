@@ -1,7 +1,7 @@
 import { TRPCError, initTRPC } from '@trpc/server';
+import { OpenApiMeta } from 'better-trpc-openapi';
 import { IncomingMessage, ServerResponse } from 'http';
 import jwt from 'jsonwebtoken';
-import { OpenApiMeta } from 'trpc-openapi';
 import { v4 as uuid } from 'uuid';
 import { z } from 'zod';
 

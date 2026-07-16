@@ -1,8 +1,6 @@
-import { inferAsyncReturnType, initTRPC } from '@trpc/server';
-import {
-  CreateAWSLambdaContextOptions,
-  UNKNOWN_PAYLOAD_FORMAT_VERSION_ERROR_MESSAGE,
-} from '@trpc/server/adapters/aws-lambda';
+import { TRPCError, initTRPC } from '@trpc/server';
+import { CreateAWSLambdaContextOptions } from '@trpc/server/adapters/aws-lambda';
+import { getHTTPStatusCodeFromError } from '@trpc/server/http';
 import { APIGatewayProxyEvent, APIGatewayProxyEventV2 } from 'aws-lambda';
 import z from 'zod';
 
@@ -17,12 +15,18 @@ const createContextV1 = ({ event }: CreateAWSLambdaContextOptions<APIGatewayProx
   return { user: event.headers['X-USER'] };
 };
 const createContextV2 = ({ event }: CreateAWSLambdaContextOptions<APIGatewayProxyEventV2>) => {
-  return { user: event.headers['X-USER'] };
+  return {
+    version: event.version,
+    routeKey: event.routeKey,
+    rawPath: event.rawPath,
+    rawQueryString: event.rawPath,
+    user: event.headers['X-USER'],
+  };
 };
 
 const createRouter = (createContext: (obj: any) => { user?: string }) => {
   const t = initTRPC
-    .context<inferAsyncReturnType<typeof createContext>>()
+    .context<Awaited<ReturnType<typeof createContext>>>()
     .meta<OpenApiMeta>()
     .create();
 
@@ -40,6 +44,24 @@ const createRouter = (createContext: (obj: any) => { user?: string }) => {
       .output(z.object({ greeting: z.string() }))
       .mutation(({ input, ctx }) => ({
         greeting: `Hello ${ctx.user ?? input.name}`,
+      })),
+    throwUnauthorized: t.procedure
+      .meta({ openapi: { path: '/unauthorized', method: 'GET' } })
+      .input(z.object({ name: z.string().optional() }))
+      .output(z.object({ greeting: z.string() }))
+      .query(({ input, ctx }) => {
+        if (input.name === 'Steve') {
+          throw new TRPCError({ code: 'UNAUTHORIZED' });
+        }
+
+        return { greeting: `Hello ${ctx.user ?? input.name ?? 'world'}` };
+      }),
+    getHelloArray: t.procedure
+      .meta({ openapi: { path: '/array', method: 'POST' } })
+      .input(z.array(z.string().optional()))
+      .output(z.object({ greeting: z.string() }))
+      .query(({ input, ctx }) => ({
+        greeting: `Hello ${`[${input.join(', ')}]`}`,
       })),
   });
 };
@@ -115,12 +137,39 @@ describe('v1', () => {
     });
   });
 
-  test('with url encoded body input', async () => {
+  test('with array input', async () => {
     const {
       statusCode,
       headers,
       body: rawBody,
     } = await handler(
+      mockAPIGatewayProxyEventV1({
+        body: JSON.stringify(['Steve', 'Mary']),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        method: 'POST',
+        path: 'array',
+        queryStringParameters: {},
+        resource: '/array',
+      }),
+      ctx,
+    );
+    const body = JSON.parse(rawBody);
+
+    console.log(rawBody);
+
+    expect(statusCode).toBe(200);
+    expect(headers).toEqual({
+      'content-type': 'application/json',
+    });
+    expect(body).toEqual({
+      greeting: 'Hello [Steve, Mary]',
+    });
+  });
+
+  test('with url encoded body input', async () => {
+    const response = await handler(
       mockAPIGatewayProxyEventV1({
         body: 'name=Aphex',
         headers: {
@@ -133,6 +182,10 @@ describe('v1', () => {
       }),
       ctx,
     );
+
+    console.log(response);
+
+    const { statusCode, headers, body: rawBody } = response;
     const body = JSON.parse(rawBody);
 
     expect(statusCode).toBe(200);
@@ -194,7 +247,7 @@ describe('v1', () => {
     );
     const body = JSON.parse(rawBody);
 
-    expect(statusCode).toBe(400);
+    expect(statusCode).toBe(getHTTPStatusCodeFromError(new TRPCError({ code: 'BAD_REQUEST' })));
     expect(headers).toEqual({
       'content-type': 'application/json',
     });
@@ -205,9 +258,8 @@ describe('v1', () => {
         {
           code: 'invalid_type',
           expected: 'string',
-          message: 'Required',
+          message: 'Invalid input: expected string, received undefined',
           path: ['name'],
-          received: 'undefined',
         },
       ],
     });
@@ -260,16 +312,45 @@ describe('v1', () => {
       'content-type': 'application/json',
     });
     expect(body).toEqual({
-      message: UNKNOWN_PAYLOAD_FORMAT_VERSION_ERROR_MESSAGE,
+      message: 'Unsupported payload format version: asdf',
       code: 'INTERNAL_SERVER_ERROR',
     });
+  });
+
+  test('UNAUTHORIZED Error', async () => {
+    const {
+      statusCode,
+      headers,
+      body: rawBody,
+    } = await handler(
+      mockAPIGatewayProxyEventV1({
+        body: '',
+        headers: {
+          'content-type': 'application/json',
+        },
+        method: 'GET',
+        path: 'unauthorized',
+        queryStringParameters: {
+          name: 'Steve',
+        },
+        resource: '/hello',
+      }),
+      ctx,
+    );
+    const body = JSON.parse(rawBody);
+
+    expect(statusCode).toBe(getHTTPStatusCodeFromError(new TRPCError({ code: 'UNAUTHORIZED' })));
+    expect(headers).toEqual({
+      'content-type': 'application/json',
+    });
+    expect(body).toEqual({ message: 'UNAUTHORIZED', code: 'UNAUTHORIZED' });
   });
 });
 
 describe('v2', () => {
-  const router = createRouter(createContextV2);
+  const routerV2 = createRouter(createContextV2); // Ensure correct typing for OpenApiRouter
   const handler = createOpenApiAwsLambdaHandler({
-    router,
+    router: routerV2,
     createContext: createContextV2,
   });
 
@@ -414,7 +495,7 @@ describe('v2', () => {
     );
     const body = JSON.parse(rawBody);
 
-    expect(statusCode).toBe(400);
+    expect(statusCode).toBe(getHTTPStatusCodeFromError(new TRPCError({ code: 'BAD_REQUEST' })));
     expect(headers).toEqual({
       'content-type': 'application/json',
     });
@@ -425,9 +506,8 @@ describe('v2', () => {
         {
           code: 'invalid_type',
           expected: 'string',
-          message: 'Required',
+          message: 'Invalid input: expected string, received undefined',
           path: ['name'],
-          received: 'undefined',
         },
       ],
     });
@@ -480,8 +560,37 @@ describe('v2', () => {
       'content-type': 'application/json',
     });
     expect(body).toEqual({
-      message: UNKNOWN_PAYLOAD_FORMAT_VERSION_ERROR_MESSAGE,
+      message: 'Unsupported payload format version: asdf',
       code: 'INTERNAL_SERVER_ERROR',
     });
+  });
+
+  test('UNAUTHORIZED Error', async () => {
+    const {
+      statusCode,
+      headers,
+      body: rawBody,
+    } = await handler(
+      mockAPIGatewayProxyEventV2({
+        body: '',
+        headers: {
+          'content-type': 'application/json',
+        },
+        method: 'GET',
+        path: 'unauthorized',
+        queryStringParameters: {
+          name: 'Steve',
+        },
+        routeKey: '$default',
+      }),
+      ctx,
+    );
+    const body = JSON.parse(rawBody);
+
+    expect(statusCode).toBe(getHTTPStatusCodeFromError(new TRPCError({ code: 'UNAUTHORIZED' })));
+    expect(headers).toEqual({
+      'content-type': 'application/json',
+    });
+    expect(body).toEqual({ message: 'UNAUTHORIZED', code: 'UNAUTHORIZED' });
   });
 });

@@ -1,11 +1,12 @@
-import { AnyProcedure, TRPCError } from '@trpc/server';
-import {
+import type { HTTPHeaders } from '@trpc/client';
+import { AnyProcedure, TRPCError, getErrorShape } from '@trpc/server';
+import type {
   NodeHTTPHandlerOptions,
   NodeHTTPRequest,
   NodeHTTPResponse,
-} from '@trpc/server/dist/adapters/node-http';
-import cloneDeep from 'lodash.clonedeep';
-import { ZodError, z } from 'zod';
+} from '@trpc/server/adapters/node-http';
+import { getHTTPStatusCodeFromError } from '@trpc/server/http';
+import type { TRPCRequestInfo } from '@trpc/server/http';
 
 import { generateOpenApiDocument } from '../../generator';
 import {
@@ -17,15 +18,16 @@ import {
 } from '../../types';
 import { acceptsRequestBody } from '../../utils/method';
 import { normalizePath } from '../../utils/path';
-import { getInputOutputParsers } from '../../utils/procedure';
+import { cloneRouterWithZodSchemas, getInputOutputParsers } from '../../utils/procedure';
 import {
-  instanceofZodTypeCoercible,
-  instanceofZodTypeLikeVoid,
-  instanceofZodTypeObject,
-  unwrapZodType,
-  zodSupportsCoerce,
+  enableCoercionOnClonedSchema,
+  getSchemaKind,
+  getValidationIssues,
+  isZodSchema,
+  normalizeInputValue,
+  unwrapSchema,
 } from '../../utils/zod';
-import { TRPC_ERROR_CODE_HTTP_STATUS, getErrorFromUnknown } from './errors';
+import { getErrorFromUnknown } from './errors';
 import { getBody, getQuery } from './input';
 import { createProcedureCache } from './procedures';
 
@@ -35,10 +37,30 @@ export type CreateOpenApiNodeHttpHandlerOptions<
   TResponse extends NodeHTTPResponse,
 > = Pick<
   NodeHTTPHandlerOptions<TRouter, TRequest, TResponse>,
-  'router' | 'createContext' | 'responseMeta' | 'onError' | 'maxBodySize'
->;
+  'router' | 'createContext' | 'responseMeta' | 'onError'
+> &
+  Partial<Pick<NodeHTTPHandlerOptions<TRouter, TRequest, TResponse>, 'maxBodySize'>>;
 
 export type OpenApiNextFunction = () => void;
+
+function headersToRecord(headers: Headers | HTTPHeaders): Record<string, string> {
+  const result: Record<string, string> = {};
+
+  if (headers instanceof Headers) {
+    // For Headers (fetch API style)
+    headers.forEach((value, key) => {
+      result[key] = value;
+    });
+  } else {
+    Object.entries(headers).forEach(([key, value]) => {
+      if (value !== undefined) {
+        result[key] = Array.isArray(value) ? value.join(', ') : String(value);
+      }
+    });
+  }
+
+  return result;
+}
 
 export const createOpenApiNodeHttpHandler = <
   TRouter extends OpenApiRouter,
@@ -47,7 +69,8 @@ export const createOpenApiNodeHttpHandler = <
 >(
   opts: CreateOpenApiNodeHttpHandlerOptions<TRouter, TRequest, TResponse>,
 ) => {
-  const router = cloneDeep(opts.router);
+  const router = cloneRouterWithZodSchemas(opts.router);
+  const coercionEnabledSchemas = new WeakSet<object>();
 
   // Validate router
   if (process.env.NODE_ENV !== 'production') {
@@ -89,7 +112,6 @@ export const createOpenApiNodeHttpHandler = <
           return next();
         }
 
-        // Can be used for warmup
         if (method === 'HEAD') {
           sendResponse(204, {}, undefined);
           return;
@@ -102,34 +124,89 @@ export const createOpenApiNodeHttpHandler = <
       }
 
       const useBody = acceptsRequestBody(method);
-      const schema = getInputOutputParsers(procedure.procedure).inputParser as z.ZodTypeAny;
-      const unwrappedSchema = unwrapZodType(schema, true);
-
-      // input should stay undefined if z.void()
-      if (!instanceofZodTypeLikeVoid(unwrappedSchema)) {
-        input = {
-          ...(useBody ? await getBody(req, maxBodySize) : getQuery(req, url)),
-          ...pathInput,
-        };
+      const schema = getInputOutputParsers(procedure.procedure).inputParser;
+      if (!isZodSchema(schema)) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Input parser expects a Zod validator',
+        });
       }
 
-      // if supported, coerce all string values to correct types
-      if (zodSupportsCoerce) {
-        if (instanceofZodTypeObject(unwrappedSchema)) {
-          Object.values(unwrappedSchema.shape).forEach((shapeSchema) => {
-            const unwrappedShapeSchema = unwrapZodType(shapeSchema, false);
-            if (instanceofZodTypeCoercible(unwrappedShapeSchema)) {
-              unwrappedShapeSchema._def.coerce = true;
-            }
+      if (!coercionEnabledSchemas.has(schema)) {
+        enableCoercionOnClonedSchema(schema);
+        coercionEnabledSchemas.add(schema);
+      }
+      const unwrappedSchema = unwrapSchema(schema, { io: 'input' });
+      const schemaKind = getSchemaKind(unwrappedSchema);
+
+      if (schemaKind !== 'void' && schemaKind !== 'undefined' && schemaKind !== 'never') {
+        const bodyOrQuery = useBody ? await getBody(req, maxBodySize) : getQuery(req, url);
+
+        if (schemaKind === 'array') {
+          const rawArrayInput = useBody
+            ? bodyOrQuery
+            : (bodyOrQuery as Record<string, unknown> | undefined)?.parameter;
+          const arrayInput = typeof rawArrayInput === 'string' ? [rawArrayInput] : rawArrayInput;
+
+          if (!Array.isArray(arrayInput)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Expected array in request ${
+                useBody ? 'body' : 'query parameter "parameter"'
+              }`,
+            });
+          }
+
+          if (pathInput && Object.keys(pathInput).length > 0) {
+            input = arrayInput.map((item) => {
+              if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+                throw new TRPCError({
+                  code: 'BAD_REQUEST',
+                  message: 'Path parameters require object items in an array request body',
+                });
+              }
+              return { ...item, ...pathInput };
+            });
+          } else {
+            input = arrayInput;
+          }
+        } else if (schemaKind === 'object') {
+          const objectInput =
+            typeof bodyOrQuery === 'object' && bodyOrQuery !== null && !Array.isArray(bodyOrQuery)
+              ? bodyOrQuery
+              : {};
+          input = {
+            ...objectInput,
+            ...pathInput,
+          };
+        } else {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Input parser must be a ZodObject or ZodArray',
           });
         }
       }
 
-      ctx = await createContext?.({ req, res });
-      const caller = router.createCaller(ctx);
+      input = normalizeInputValue(schema, input, { wrapArrayValues: !useBody });
 
-      const segments = procedure.path.split('.');
-      const procedureFn = segments.reduce((acc, curr) => acc[curr], caller) as AnyProcedure;
+      ctx = await createContext?.({
+        req,
+        res,
+        info: {} as TRPCRequestInfo, // Ensure TRPCRequestInfo is provided
+      });
+
+      const caller = router.createCaller(ctx);
+      const segments = procedure?.path.split('.') ?? [];
+      const procedureFn = segments.reduce((acc: any, curr: string) => acc[curr], caller) as
+        | AnyProcedure
+        | undefined;
+
+      if (!procedureFn) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Procedure not found',
+        });
+      }
 
       data = await procedureFn(input);
 
@@ -139,12 +216,14 @@ export const createOpenApiNodeHttpHandler = <
         ctx,
         data: [data],
         errors: [],
+        info: {} as TRPCRequestInfo, // Provide TRPCRequestInfo
+        eagerGeneration: false, // Set eagerGeneration flag
       });
 
       const statusCode = meta?.status ?? 200;
       const headers = meta?.headers ?? {};
       const body: OpenApiSuccessResponse<typeof data> = data;
-      sendResponse(statusCode, headers, body);
+      sendResponse(statusCode, headersToRecord(headers), body);
     } catch (cause) {
       const error = getErrorFromUnknown(cause);
 
@@ -163,31 +242,36 @@ export const createOpenApiNodeHttpHandler = <
         ctx,
         data: [data],
         errors: [error],
+        eagerGeneration: false,
+        info: {} as TRPCRequestInfo, // Ensure TRPCRequestInfo is provided
       });
 
-      const errorShape = router._def.getErrorShape({
+      const errorShape = getErrorShape({
+        config: opts.router._def._config,
         error,
-        type: procedure?.type ?? 'unknown',
-        path: procedure?.path,
-        input,
-        ctx,
-      });
+        type: 'unknown',
+        path,
+        input: undefined,
+        ctx: undefined,
+      }) ?? {
+        message: error.message ?? 'An error occurred',
+        code: error.code,
+      };
 
-      const isInputValidationError =
-        error.code === 'BAD_REQUEST' &&
-        error.cause instanceof Error &&
-        error.cause.name === 'ZodError';
+      const validationIssues =
+        error.code === 'BAD_REQUEST' ? getValidationIssues(error.cause) : undefined;
+      const isInputValidationError = validationIssues !== undefined;
 
-      const statusCode = meta?.status ?? TRPC_ERROR_CODE_HTTP_STATUS[error.code] ?? 500;
+      const statusCode = meta?.status ?? getHTTPStatusCodeFromError(error) ?? 500;
       const headers = meta?.headers ?? {};
       const body: OpenApiErrorResponse = {
         message: isInputValidationError
           ? 'Input validation failed'
           : errorShape?.message ?? error.message ?? 'An error occurred',
         code: error.code,
-        issues: isInputValidationError ? (error.cause as ZodError).errors : undefined,
+        issues: validationIssues,
       };
-      sendResponse(statusCode, headers, body);
+      sendResponse(statusCode, headersToRecord(headers), body);
     }
   };
 };

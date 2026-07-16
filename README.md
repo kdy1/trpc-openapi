@@ -1,15 +1,15 @@
-![trpc-openapi](assets/trpc-openapi-readme.png)
+![better-trpc-openapi](assets/trpc-openapi-readme.png)
 
 <div align="center">
-  <h1>trpc-openapi</h1>
-  <a href="https://www.npmjs.com/package/trpc-openapi"><img src="https://img.shields.io/npm/v/trpc-openapi.svg?style=flat&color=brightgreen" target="_blank" /></a>
+  <h1>better-trpc-openapi</h1>
+  <a href="https://www.npmjs.com/package/better-trpc-openapi"><img src="https://img.shields.io/npm/v/better-trpc-openapi.svg?style=flat&color=brightgreen" target="_blank" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-black" /></a>
   <a href="https://trpc.io/discord" target="_blank"><img src="https://img.shields.io/badge/chat-discord-blue.svg" /></a>
   <br />
   <hr />
 </div>
 
-#### `trpc-openapi` is maintained by ProsePilot - simple, fast and free online [writing tools](https://www.prosepilot.com/tools).
+#### `better-trpc-openapi` is the Zod 4-native maintained fork of `trpc-openapi`.
 
 ---
 
@@ -21,20 +21,20 @@
 
 ## Usage
 
-**1. Install `trpc-openapi`.**
+**1. Install `better-trpc-openapi`, tRPC 11, and Zod 4.**
 
 ```bash
 # npm
-npm install trpc-openapi
+npm install better-trpc-openapi @trpc/server@^11 zod@^4
 # yarn
-yarn add trpc-openapi
+yarn add better-trpc-openapi @trpc/server@^11 zod@^4
 ```
 
 **2. Add `OpenApiMeta` to your tRPC instance.**
 
 ```typescript
 import { initTRPC } from '@trpc/server';
-import { OpenApiMeta } from 'trpc-openapi';
+import { OpenApiMeta } from 'better-trpc-openapi';
 
 const t = initTRPC.meta<OpenApiMeta>().create(); /* 👈 */
 ```
@@ -56,7 +56,7 @@ export const appRouter = t.router({
 **4. Generate an OpenAPI document.**
 
 ```typescript
-import { generateOpenApiDocument } from 'trpc-openapi';
+import { generateOpenApiDocument } from 'better-trpc-openapi';
 
 import { appRouter } from '../appRouter';
 
@@ -68,15 +68,15 @@ export const openApiDocument = generateOpenApiDocument(appRouter, {
 });
 ```
 
-**5. Add an `trpc-openapi` handler to your app.**
+**5. Add a `better-trpc-openapi` handler to your app.**
 
 We currently support adapters for [`Express`](http://expressjs.com/), [`Next.js`](https://nextjs.org/), [`Serverless`](https://www.serverless.com/), [`Fastify`](https://www.fastify.io/), [`Nuxt`](https://nuxtjs.org/) & [`Node:HTTP`](https://nodejs.org/api/http.html).
 
 [`Fetch`](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API), [`Cloudflare Workers`](https://workers.cloudflare.com/) & more soon™, PRs are welcomed 🙌.
 
 ```typescript
+import { createOpenApiHttpHandler } from 'better-trpc-openapi';
 import http from 'http';
-import { createOpenApiHttpHandler } from 'trpc-openapi';
 
 import { appRouter } from '../appRouter';
 
@@ -97,8 +97,8 @@ const body = await res.json(); /* { greeting: 'Hello James!' } */
 
 Peer dependencies:
 
-- [`tRPC`](https://github.com/trpc/trpc) Server v10 (`@trpc/server`) must be installed.
-- [`Zod`](https://github.com/colinhacks/zod) v3 (`zod@^3.14.4`) must be installed (recommended `^3.20.0`).
+- [`tRPC`](https://github.com/trpc/trpc) Server v11 (`@trpc/server@^11`) must be installed.
+- [`Zod`](https://github.com/colinhacks/zod) v4 (`zod@^4.0.0`) must be installed. Zod 3 is not supported.
 
 For a procedure to support OpenAPI the following _must_ be true:
 
@@ -115,6 +115,13 @@ Please note:
 - Trailing slashes are ignored.
 - Routing is case-insensitive.
 
+### Zod 4 schema behavior
+
+- Request preprocessors are documented using their output schema, while request transforms are documented using the values they accept.
+- Response transforms cannot be represented reliably and cause document generation to fail with the affected procedure name.
+- Zod codecs and cyclic schemas are rejected with a contextual error because OpenAPI 3.0 cannot inline them safely.
+- Zod metadata is preserved where OpenAPI 3.0 supports it. JSON Schema `examples` are represented by OpenAPI 3.0's singular `example` field.
+
 ## HTTP Requests
 
 Procedures with a `GET`/`DELETE` method will accept inputs via URL `query parameters`. Procedures with a `POST`/`PATCH`/`PUT` method will accept inputs via the `request body` with a `application/json` or `application/x-www-form-urlencoded` content type.
@@ -125,7 +132,7 @@ A procedure can accept a set of inputs via URL path parameters. You can add a pa
 
 ### Query parameters
 
-Query & path parameter inputs are always accepted as a `string`. This library will attempt to [coerce](https://github.com/colinhacks/zod#coercion-for-primitives) your input values to the following primitive types out of the box: `number`, `boolean`, `bigint` and `date`. If you wish to support others such as `object`, `array` etc. please use [`z.preprocess()`](https://github.com/colinhacks/zod#preprocess).
+Query & path parameter inputs are always accepted as a `string`. This library will attempt to [coerce](https://github.com/colinhacks/zod#coercion-for-primitives) your input `array` and `object` values to the following primitive types out of the box: `number`, `boolean`, `bigint` and `date`. If you wish to support others (such as nested `object`, `array`) etc. please use [`z.preprocess()`](https://github.com/colinhacks/zod#preprocess).
 
 ```typescript
 // Router
@@ -191,7 +198,7 @@ Explore a [complete example here](examples/with-nextjs/src/server/router.ts).
 
 ```typescript
 import { TRPCError, initTRPC } from '@trpc/server';
-import { OpenApiMeta } from 'trpc-openapi';
+import { OpenApiMeta } from 'better-trpc-openapi';
 
 type User = { id: string; name: string };
 
@@ -249,8 +256,8 @@ Please see [full example here](examples/with-express).
 
 ```typescript
 import { createExpressMiddleware } from '@trpc/server/adapters/express';
+import { createOpenApiExpressMiddleware } from 'better-trpc-openapi';
 import express from 'express';
-import { createOpenApiExpressMiddleware } from 'trpc-openapi';
 
 import { appRouter } from '../appRouter';
 
@@ -268,7 +275,7 @@ Please see [full example here](examples/with-nextjs).
 
 ```typescript
 // pages/api/[...trpc].ts
-import { createOpenApiNextHandler } from 'trpc-openapi';
+import { createOpenApiNextHandler } from 'better-trpc-openapi';
 
 import { appRouter } from '../../server/appRouter';
 
@@ -280,7 +287,7 @@ export default createOpenApiNextHandler({ router: appRouter });
 Please see [full example here](examples/with-serverless).
 
 ```typescript
-import { createOpenApiAwsLambdaHandler } from 'trpc-openapi';
+import { createOpenApiAwsLambdaHandler } from 'better-trpc-openapi';
 
 import { appRouter } from './appRouter';
 
@@ -293,8 +300,8 @@ Please see [full example here](examples/with-fastify).
 
 ```typescript
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
+import { fastifyTRPCOpenApiPlugin } from 'better-trpc-openapi';
 import Fastify from 'fastify';
-import { fastifyTRPCOpenApiPlugin } from 'trpc-openapi';
 
 import { appRouter } from './router';
 
@@ -332,7 +339,7 @@ Please see [full typings here](src/types.ts).
 
 | Property       | Type                | Description                                                                                          | Required | Default                |
 | -------------- | ------------------- | ---------------------------------------------------------------------------------------------------- | -------- | ---------------------- |
-| `enabled`      | `boolean`           | Exposes this procedure to `trpc-openapi` adapters and on the OpenAPI document.                       | `false`  | `true`                 |
+| `enabled`      | `boolean`           | Exposes this procedure to `better-trpc-openapi` adapters and on the OpenAPI document.                | `false`  | `true`                 |
 | `method`       | `HttpMethod`        | HTTP method this endpoint is exposed on. Value can be `GET`, `POST`, `PATCH`, `PUT` or `DELETE`.     | `true`   | `undefined`            |
 | `path`         | `string`            | Pathname this endpoint is exposed on. Value must start with `/`, specify path parameters using `{}`. | `true`   | `undefined`            |
 | `protect`      | `boolean`           | Requires this endpoint to use a security scheme.                                                     | `false`  | `false`                |
@@ -357,7 +364,7 @@ Please see [full typings here](src/adapters/node-http/core.ts).
 
 ---
 
-_Still using tRPC v9? See our [`.interop()`](examples/with-interop) example._
+See the [minimal tRPC 11 router](examples/with-interop) example.
 
 ## License
 

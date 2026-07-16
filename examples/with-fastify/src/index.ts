@@ -8,8 +8,8 @@
 import cors from '@fastify/cors';
 import fastifySwagger from '@fastify/swagger';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
+import { fastifyTRPCOpenApiPlugin } from 'better-trpc-openapi';
 import Fastify from 'fastify';
-import { fastifyTRPCOpenApiPlugin } from 'trpc-openapi';
 
 import { openApiDocument } from './openapi';
 import { appRouter, createContext } from './router';
@@ -37,20 +37,17 @@ async function main() {
   // Serve the OpenAPI document
   app.get('/openapi.json', () => openApiDocument);
 
-  // Server Swagger UI
+  // Register the OpenAPI document with Fastify Swagger
   await app.register(fastifySwagger, {
-    routePrefix: '/docs',
     mode: 'static',
     specification: { document: openApiDocument },
-    uiConfig: { displayOperationId: true },
-    exposeRoute: true,
   });
 
   await app
     .listen({ port: 3000 })
     .then((address) => {
       app.swagger();
-      console.log(`Server started on ${address}\nSwagger UI: http://localhost:3000/docs`);
+      console.log(`Server started on ${address}\nOpenAPI: http://localhost:3000/openapi.json`);
     })
     .catch((e) => {
       throw e;

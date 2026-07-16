@@ -1,9 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-floating-promises, @typescript-eslint/ban-ts-comment */
 import { TRPCError, initTRPC } from '@trpc/server';
 import { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
+import { OpenApiMeta } from 'better-trpc-openapi';
 import { type FastifyReply, type FastifyRequest } from 'fastify';
 import jwt from 'jsonwebtoken';
-import { OpenApiMeta } from 'trpc-openapi';
 import { v4 as uuid } from 'uuid';
 import { z } from 'zod';
 

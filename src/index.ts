@@ -1,5 +1,4 @@
 import {
-  CreateOpenApiAwsLambdaHandlerOptions,
   CreateOpenApiExpressMiddlewareOptions,
   CreateOpenApiFastifyPluginOptions,
   CreateOpenApiHttpHandlerOptions,
@@ -18,12 +17,14 @@ import {
   openApiVersion,
 } from './generator';
 import {
+  CreateOpenApiAwsLambdaHandlerOptions,
   OpenApiErrorResponse,
   OpenApiMeta,
   OpenApiMethod,
   OpenApiResponse,
   OpenApiRouter,
   OpenApiSuccessResponse,
+  OpenApiValidationIssue,
 } from './types';
 import { ZodTypeLikeString, ZodTypeLikeVoid } from './utils/zod';
 
@@ -49,6 +50,7 @@ export {
   OpenApiResponse,
   OpenApiSuccessResponse,
   OpenApiErrorResponse,
+  OpenApiValidationIssue,
   ZodTypeLikeString,
   ZodTypeLikeVoid,
 };

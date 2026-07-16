@@ -130,7 +130,7 @@ describe('fastify adapter', () => {
         .meta({ openapi: { method: 'GET', path: '/echo' } })
         .input(z.object({ payload: z.string() }))
         .output(z.object({ payload: z.string(), context: z.undefined() }))
-        .query(({ input }) => ({ payload: input.payload })),
+        .query(({ input }) => ({ payload: input.payload, context: undefined })),
     });
 
     const { url, close } = await createFastifyServerWithRouter(
@@ -158,7 +158,7 @@ describe('fastify adapter', () => {
         .meta({ openapi: { method: 'GET', path: '/echo' } })
         .input(z.object({ payload: z.string() }))
         .output(z.object({ payload: z.string(), context: z.undefined() }))
-        .query(({ input }) => ({ payload: input.payload })),
+        .query(({ input }) => ({ payload: input.payload, context: undefined })),
     });
 
     const { url, close } = await createFastifyServerWithRouter(

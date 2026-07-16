@@ -14,7 +14,6 @@ import {
   OpenApiRouter,
   createOpenApiHttpHandler,
 } from '../../src';
-import * as zodUtils from '../../src/utils/zod';
 
 // @ts-expect-error - global fetch
 global.fetch = fetch;
@@ -166,9 +165,8 @@ describe('standalone adapter', () => {
         {
           code: 'invalid_type',
           expected: 'string',
-          message: 'Required',
+          message: 'Invalid input: expected string, received undefined',
           path: ['payload'],
-          received: 'undefined',
         },
       ],
     });
@@ -207,9 +205,8 @@ describe('standalone adapter', () => {
         {
           code: 'invalid_type',
           expected: 'string',
-          message: 'Required',
+          message: 'Invalid input: expected string, received undefined',
           path: ['payload'],
-          received: 'undefined',
         },
       ],
     });
@@ -244,9 +241,8 @@ describe('standalone adapter', () => {
         {
           code: 'invalid_type',
           expected: 'string',
-          message: 'Required',
+          message: 'Invalid input: expected string, received undefined',
           path: ['payload'],
-          received: 'undefined',
         },
       ],
     });
@@ -285,9 +281,8 @@ describe('standalone adapter', () => {
         {
           code: 'invalid_type',
           expected: 'string',
-          message: 'Expected string, received number',
+          message: 'Invalid input: expected string, received number',
           path: ['payload'],
-          received: 'number',
         },
       ],
     });
@@ -490,8 +485,20 @@ describe('standalone adapter', () => {
       echo: t.procedure
         .meta({ openapi: { method: 'GET', path: '/echo' } })
         .input(z.object({ payload: z.string() }))
-        .output(z.object({ payload: z.string(), context: z.undefined() }))
-        .query(({ input, ctx }) => ({ payload: input.payload, context: ctx })),
+        .output(
+          z.object({
+            payload: z.string(),
+            context: z.union([
+              z.object({}).passthrough(),
+              z.record(z.string(), z.any()),
+              z.undefined(),
+            ]),
+          }),
+        )
+        .query(({ input, ctx }) => ({
+          payload: input.payload,
+          context: ctx as Record<string, unknown> | undefined,
+        })),
     });
 
     const { url, close } = createHttpServerWithRouter({
@@ -524,7 +531,7 @@ describe('standalone adapter', () => {
         .meta({ openapi: { method: 'GET', path: '/echo' } })
         .input(z.object({ payload: z.string() }))
         .output(z.object({ payload: z.string(), context: z.undefined() }))
-        .query(({ input, ctx }) => ({ payload: input.payload })),
+        .query(({ input, ctx }) => ({ payload: input.payload, context: undefined })),
     });
 
     const { url, close } = createHttpServerWithRouter({
@@ -863,15 +870,14 @@ describe('standalone adapter', () => {
         // @ts-expect-error - send monkey patched input type
         return client.withVoidQuery.query({});
       }).rejects.toThrowErrorMatchingInlineSnapshot(`
-      "[
-        {
-          \\"code\\": \\"invalid_type\\",
-          \\"expected\\": \\"void\\",
-          \\"received\\": \\"object\\",
-          \\"path\\": [],
-          \\"message\\": \\"Expected void, received object\\"
-        }
-      ]"
+        "[
+          {
+            \\"expected\\": \\"void\\",
+            \\"code\\": \\"invalid_type\\",
+            \\"path\\": [],
+            \\"message\\": \\"Invalid input: expected void, received object\\"
+          }
+        ]"
       `);
       expect(createContextMock).toHaveBeenCalledTimes(1);
       expect(responseMetaMock).toHaveBeenCalledTimes(1);
@@ -895,11 +901,10 @@ describe('standalone adapter', () => {
       }).rejects.toThrowErrorMatchingInlineSnapshot(`
         "[
           {
-            \\"code\\": \\"invalid_type\\",
             \\"expected\\": \\"void\\",
-            \\"received\\": \\"object\\",
+            \\"code\\": \\"invalid_type\\",
             \\"path\\": [],
-            \\"message\\": \\"Expected void, received object\\"
+            \\"message\\": \\"Invalid input: expected void, received Object\\"
           }
         ]"
       `);
@@ -1188,46 +1193,36 @@ describe('standalone adapter', () => {
     close();
   });
 
-  test('with non-coerce preprocess', async () => {
-    // only applies when zod does not support (below version v3.20.0)
+  test('with explicit preprocess', async () => {
+    const appRouter = t.router({
+      plusOne: t.procedure
+        .meta({ openapi: { method: 'GET', path: '/plus-one' } })
+        .input(
+          z.object({
+            number: z.preprocess(
+              (arg) => (typeof arg === 'string' ? parseInt(arg) : arg),
+              z.number(),
+            ),
+          }),
+        )
+        .output(z.object({ result: z.number() }))
+        .query(({ input }) => ({ result: input.number + 1 })),
+    });
 
-    // @ts-expect-error - hack to disable zodSupportsCoerce
-    // eslint-disable-next-line import/namespace
-    zodUtils.zodSupportsCoerce = false;
-    {
-      const appRouter = t.router({
-        plusOne: t.procedure
-          .meta({ openapi: { method: 'GET', path: '/plus-one' } })
-          .input(
-            z.object({
-              number: z.preprocess(
-                (arg) => (typeof arg === 'string' ? parseInt(arg) : arg),
-                z.number(),
-              ),
-            }),
-          )
-          .output(z.object({ result: z.number() }))
-          .query(({ input }) => ({ result: input.number + 1 })),
-      });
+    const { url, close } = createHttpServerWithRouter({
+      router: appRouter,
+    });
 
-      const { url, close } = createHttpServerWithRouter({
-        router: appRouter,
-      });
+    const res = await fetch(`${url}/plus-one?number=9`, { method: 'GET' });
+    const body = await res.json();
 
-      const res = await fetch(`${url}/plus-one?number=9`, { method: 'GET' });
-      const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ result: 10 });
+    expect(createContextMock).toHaveBeenCalledTimes(1);
+    expect(responseMetaMock).toHaveBeenCalledTimes(1);
+    expect(onErrorMock).toHaveBeenCalledTimes(0);
 
-      expect(res.status).toBe(200);
-      expect(body).toEqual({ result: 10 });
-      expect(createContextMock).toHaveBeenCalledTimes(1);
-      expect(responseMetaMock).toHaveBeenCalledTimes(1);
-      expect(onErrorMock).toHaveBeenCalledTimes(0);
-
-      close();
-    }
-    // @ts-expect-error - hack to re-enable zodSupportsCoerce
-    // eslint-disable-next-line import/namespace
-    zodUtils.zodSupportsCoerce = true;
+    close();
   });
 
   test('with coerce', async () => {
@@ -1329,6 +1324,156 @@ describe('standalone adapter', () => {
     expect(createContextMock).toHaveBeenCalledTimes(1);
     expect(responseMetaMock).toHaveBeenCalledTimes(1);
     expect(onErrorMock).toHaveBeenCalledTimes(0);
+
+    close();
+  });
+
+  test('with top-level and nested query arrays', async () => {
+    const appRouter = t.router({
+      sum: t.procedure
+        .meta({ openapi: { method: 'GET', path: '/sum' } })
+        .input(z.array(z.number()))
+        .output(z.object({ result: z.number() }))
+        .query(({ input }) => ({ result: input.reduce((total, value) => total + value, 0) })),
+      nested: t.procedure
+        .meta({ openapi: { method: 'GET', path: '/nested' } })
+        .input(z.object({ values: z.array(z.number()) }))
+        .output(z.object({ result: z.number() }))
+        .query(({ input }) => ({
+          result: input.values.reduce((total, value) => total + value, 0),
+        })),
+    });
+    const { url, close } = createHttpServerWithRouter({ router: appRouter });
+
+    const topLevelResponse = await fetch(`${url}/sum?parameter=2&parameter=3`, {
+      method: 'GET',
+    });
+    expect(topLevelResponse.status).toBe(200);
+    expect(await topLevelResponse.json()).toEqual({ result: 5 });
+
+    clearMocks();
+    const nestedResponse = await fetch(`${url}/nested?values=4&values=5`, { method: 'GET' });
+    expect(nestedResponse.status).toBe(200);
+    expect(await nestedResponse.json()).toEqual({ result: 9 });
+
+    close();
+  });
+
+  test('coerces Zod 4 primitives without mutating or double-parsing the router schema', async () => {
+    const transform = jest.fn((value: string) => value.length);
+    const inputSchema = z.object({
+      enabled: z.boolean(),
+      amount: z.bigint(),
+      values: z.array(z.number()),
+      label: z.string().transform(transform),
+    });
+    const appRouter = t.router({
+      inspect: t.procedure
+        .meta({ openapi: { method: 'GET', path: '/inspect' } })
+        .input(inputSchema)
+        .output(
+          z.object({
+            enabled: z.boolean(),
+            amount: z.string(),
+            total: z.number(),
+            labelLength: z.number(),
+          }),
+        )
+        .query(({ input }) => ({
+          enabled: input.enabled,
+          amount: input.amount.toString(),
+          total: input.values.reduce((total, value) => total + value, 0),
+          labelLength: input.label,
+        })),
+    });
+    const { url, close } = createHttpServerWithRouter({ router: appRouter });
+
+    const response = await fetch(
+      `${url}/inspect?enabled=1&amount=42&values=2&values=3&label=hello`,
+      { method: 'GET' },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      enabled: true,
+      amount: '42',
+      total: 5,
+      labelLength: 5,
+    });
+    expect(transform).toHaveBeenCalledTimes(1);
+    expect(
+      inputSchema.safeParse({ enabled: '1', amount: '42', values: ['2'], label: 'hello' }).success,
+    ).toBe(false);
+
+    close();
+  });
+
+  test('passes raw transport values to preprocessors exactly once', async () => {
+    const preprocess = jest.fn((value: unknown) =>
+      typeof value === 'string' ? Number(value) : value,
+    );
+    const appRouter = t.router({
+      inspect: t.procedure
+        .meta({ openapi: { method: 'GET', path: '/inspect' } })
+        .input(z.object({ amount: z.preprocess(preprocess, z.number()) }))
+        .output(z.object({ amount: z.number() }))
+        .query(({ input }) => input),
+    });
+    const { url, close } = createHttpServerWithRouter({ router: appRouter });
+
+    const response = await fetch(`${url}/inspect?amount=9`, { method: 'GET' });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ amount: 9 });
+    expect(preprocess).toHaveBeenCalledTimes(1);
+    expect(preprocess.mock.calls[0]?.[0]).toBe('9');
+
+    close();
+  });
+
+  test('preserves user middleware when cloning procedures for coercion', async () => {
+    const middleware = jest.fn();
+    const appRouter = t.router({
+      inspect: t.procedure
+        .meta({ openapi: { method: 'GET', path: '/inspect' } })
+        .input(z.object({ amount: z.number() }))
+        .use(({ input, next }) => {
+          middleware(input);
+          return next({ input: { amount: input.amount + 1 } });
+        })
+        .output(z.object({ amount: z.number() }))
+        .query(({ input }) => input),
+    });
+    const { url, close } = createHttpServerWithRouter({ router: appRouter });
+
+    const response = await fetch(`${url}/inspect?amount=9`, { method: 'GET' });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ amount: 10 });
+    expect(middleware).toHaveBeenCalledWith({ amount: 9 });
+
+    close();
+  });
+
+  test('returns Zod 4 issues for invalid coerced input', async () => {
+    const appRouter = t.router({
+      inspect: t.procedure
+        .meta({ openapi: { method: 'GET', path: '/inspect' } })
+        .input(z.object({ amount: z.number() }))
+        .output(z.object({ amount: z.number() }))
+        .query(({ input }) => input),
+    });
+    const { url, close } = createHttpServerWithRouter({ router: appRouter });
+
+    const response = await fetch(`${url}/inspect?amount=not-a-number`, { method: 'GET' });
+    const body = (await response.json()) as OpenApiErrorResponse;
+
+    expect(response.status).toBe(400);
+    expect(body.message).toBe('Input validation failed');
+    expect(body.code).toBe('BAD_REQUEST');
+    expect(body.issues).toEqual([
+      expect.objectContaining({ code: 'invalid_type', path: ['amount'] }),
+    ]);
 
     close();
   });

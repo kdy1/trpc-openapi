@@ -1,11 +1,17 @@
 import { TRPCError } from '@trpc/server';
-import { NodeHTTPRequest } from '@trpc/server/dist/adapters/node-http';
+import { NodeHTTPRequest } from '@trpc/server/adapters/node-http';
 import parse from 'co-body';
 
-export const getQuery = (req: NodeHTTPRequest, url: URL): Record<string, string> => {
-  const query: Record<string, string> = {};
+export type OpenApiQuery = Record<string, string | string[]>;
+type NodeHTTPRequestWithQuery = NodeHTTPRequest & {
+  query?: Record<string, string | string[]>;
+};
 
-  if (!req.query) {
+export const getQuery = (req: NodeHTTPRequest, url: URL): OpenApiQuery => {
+  const query: OpenApiQuery = {};
+  const requestWithQuery = req as NodeHTTPRequestWithQuery;
+
+  if (!requestWithQuery.query) {
     const parsedQs: Record<string, string[]> = {};
     url.searchParams.forEach((value, key) => {
       if (!parsedQs[key]) {
@@ -13,20 +19,16 @@ export const getQuery = (req: NodeHTTPRequest, url: URL): Record<string, string>
       }
       parsedQs[key]!.push(value);
     });
-    req.query = parsedQs;
+    requestWithQuery.query = parsedQs;
   }
 
-  // normalize first value in array
-  Object.keys(req.query).forEach((key) => {
-    const value = req.query[key];
-    if (value) {
-      if (typeof value === 'string') {
-        query[key] = value;
-      } else if (Array.isArray(value)) {
-        if (typeof value[0] === 'string') {
-          query[key] = value[0];
-        }
-      }
+  Object.keys(requestWithQuery.query ?? {}).forEach((key) => {
+    const value = requestWithQuery.query?.[key];
+    if (typeof value === 'string') {
+      query[key] = value;
+    } else if (Array.isArray(value)) {
+      const values = value.filter((item): item is string => typeof item === 'string');
+      query[key] = values.length === 1 ? values[0]! : values;
     }
   });
 
@@ -44,7 +46,7 @@ export const getBody = async (req: NodeHTTPRequest, maxBodySize = BODY_100_KB): 
   const contentType = req.headers['content-type'];
   if (contentType === 'application/json' || contentType === 'application/x-www-form-urlencoded') {
     try {
-      const { raw, parsed } = await parse(req, {
+      const { raw, parsed } = await parse(req as Parameters<typeof parse>[0], {
         limit: maxBodySize,
         strict: false,
         returnRawBody: true,
